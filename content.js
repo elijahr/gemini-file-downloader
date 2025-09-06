@@ -52,35 +52,19 @@ async function openSidebar() {
     const sidebar = document.querySelector('context-sidebar');
     if (!sidebar) {
         console.log("[gemini-file-downloader] Sidebar not open, clicking to open.");
-        try {
-            const filesButton = await waitForElement('button[data-test-id="studio-sidebar-button"]', 10000);
-            if (!filesButton) {
-                throw new Error("Could not find the 'Files' button");
-            }
-            filesButton.click();
+        const filesButton = await waitForElement('button[data-test-id="studio-sidebar-button"]', 10000);
+        filesButton.click();
 
-            // 2. Wait for the sidebar to appear and get all file "chips"
-            console.log("[gemini-file-downloader] Waiting for the sidebar to load...");
-            await waitForElement('context-sidebar', 10000);
-        } catch (error) {
-            console.warn("Failed to open sidebar:", error.message);
-            return null;
-        }
+        // 2. Wait for the sidebar to appear and get all file "chips"
+        console.log("[gemini-file-downloader] Waiting for the sidebar to load...");
+        await waitForElement('context-sidebar', 10000);
     } else {
         console.log("[gemini-file-downloader] Sidebar already open.");
     }
 
     // The file chips are identified by their host element and class
     console.log("[gemini-file-downloader] Waiting for chips...");
-    try {
-        await waitForElement('sidebar-immersive-chip .container', 8000);
-    } catch (error) {
-        console.warn("Timeout waiting for file chips:", error.message);
-        // Return sidebar anyway, the caller can handle the absence of chips
-    }
-
-    // Add a small delay to ensure all chips are loaded
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await waitForElement('sidebar-immersive-chip .container', 8000);
 
     return document.querySelector('context-sidebar');
 }
@@ -339,6 +323,7 @@ function updateProgressIndicator(current, total, isComplete = false) {
 
 // The main function to orchestrate the download process
 async function downloadAllFiles() {
+    const startTime = Date.now();
     console.log("[gemini-file-downloader] Starting Gemini file download process...");
 
     // Set global download state
@@ -399,10 +384,25 @@ async function downloadAllFiles() {
             break;
         }
 
-        sidebar = await openSidebar();
+        // Try to open sidebar with retries
+        let sidebar = null;
+        let sidebarRetries = 0;
+        const maxSidebarRetries = 3;
+
+        while (!sidebar && sidebarRetries < maxSidebarRetries) {
+            sidebar = await openSidebar();
+            if (!sidebar) {
+                sidebarRetries++;
+                console.warn(`Could not open sidebar for file ${i + 1}, attempt ${sidebarRetries}/${maxSidebarRetries}`);
+                if (sidebarRetries < maxSidebarRetries) {
+                    console.log(`Retrying sidebar open in 2 seconds...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        }
 
         if (!sidebar) {
-            console.warn(`Could not open sidebar for file ${i + 1}. Skipping.`);
+            console.warn(`Failed to open sidebar for file ${i + 1} after ${maxSidebarRetries} attempts. Skipping.`);
             updateFileStatus(i, 'error');
             updateProgressIndicator(i + 1, totalFiles);
             continue;
@@ -493,7 +493,16 @@ async function downloadAllFiles() {
         }
 
         // Re-open the sidebar to ensure we can access the next chip
-        await openSidebar();
+        let reopenRetries = 0;
+        while (reopenRetries < 3) {
+            const reopenedSidebar = await openSidebar();
+            if (reopenedSidebar) break;
+            reopenRetries++;
+            if (reopenRetries < 3) {
+                console.log(`Retrying sidebar reopen, attempt ${reopenRetries + 1}/3...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
     }
 
     // Close the main file sidebar
